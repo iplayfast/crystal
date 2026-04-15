@@ -26,6 +26,7 @@
 #include <iostream>
 #include <sstream>
 #include <QFile>
+#include <filesystem>
 
 struct OllamaModel {
     QString name;
@@ -373,14 +374,20 @@ private slots:
         QString input_path = input_model_edit->text();
         QString output_path = output_path_edit->text();
         
-        if (input_path.isEmpty() && additional_models.isEmpty()) {
-            QMessageBox::warning(this, "Error", "Please add at least one model to ensemble");
-            return;
+        // Collect all models
+        QStringList all_models;
+        if (!input_path.isEmpty()) {
+            all_models.append(input_path);
+        }
+        for (const QString& m : additional_models) {
+            if (!all_models.contains(m)) {
+                all_models.append(m);
+            }
         }
         
-        // If input_path is set but not in additional_models, add it
-        if (!input_path.isEmpty() && !additional_models.contains(input_path)) {
-            additional_models.prepend(input_path);
+        if (all_models.isEmpty()) {
+            QMessageBox::warning(this, "Error", "Please add at least one model to ensemble");
+            return;
         }
         
         if (output_path.isEmpty()) {
@@ -391,18 +398,69 @@ private slots:
         quantize_button->setEnabled(false);
         progress_bar->setValue(0);
         log_text->clear();
-        log_text->append("Starting quantization...");
         
-        // Only pass unique models - filter duplicates
-        QStringList unique_models;
-        for (const QString& m : additional_models) {
-            if (!unique_models.contains(m)) {
-                unique_models.append(m);
+        // Single model: use llama-quantize TQ1_0 directly
+        if (all_models.size() == 1) {
+            QString input_model = all_models.first();
+            log_text->append("Converting to TQ1_0 format (1-bit ternary)...");
+            
+            std::string cmd = "/home/chris/ai/llama.cpp/build/bin/llama-quantize \"" + 
+                input_model.toStdString() + "\" \"" + output_path.toStdString() + "\" TQ1_0 2>&1";
+            
+            int ret = system(cmd.c_str());
+            
+            if (ret == 0 && std::filesystem::exists(output_path.toStdString())) {
+                auto out_size = std::filesystem::file_size(output_path.toStdString());
+                auto in_size = std::filesystem::file_size(input_model.toStdString());
+                
+                progress_bar->setValue(100);
+                log_text->append("TQ1_0 conversion complete!");
+                log_text->append(QString("Original size: %1 bytes").arg(in_size));
+                log_text->append(QString("Quantized size: %1 bytes").arg(out_size));
+                log_text->append(QString("Compression: %1%").arg(out_size * 100.0 / in_size, 0, 'f', 1));
+                
+                QMessageBox::information(this, "Success", 
+                    QString("Quantization complete!\n\nOutput: %1\nSize: %2 MB")
+                    .arg(output_path)
+                    .arg(out_size / (1024.0 * 1024.0), 0, 'f', 2));
+            } else {
+                // Try with --allow-requantize
+                log_text->append("First attempt failed, trying with --allow-requantize...");
+                
+                cmd = "/home/chris/ai/llama.cpp/build/bin/llama-quantize --allow-requantize \"" + 
+                    input_model.toStdString() + "\" \"" + output_path.toStdString() + "\" TQ1_0 2>&1";
+                ret = system(cmd.c_str());
+                
+                if (ret == 0 && std::filesystem::exists(output_path.toStdString())) {
+                    auto out_size = std::filesystem::file_size(output_path.toStdString());
+                    auto in_size = std::filesystem::file_size(input_model.toStdString());
+                    
+                    progress_bar->setValue(100);
+                    log_text->append("TQ1_0 conversion complete!");
+                    log_text->append(QString("Original size: %1 bytes").arg(in_size));
+                    log_text->append(QString("Quantized size: %1 bytes").arg(out_size));
+                    log_text->append(QString("Compression: %1%").arg(out_size * 100.0 / in_size, 0, 'f', 1));
+                    
+                    QMessageBox::information(this, "Success", 
+                        QString("Quantization complete!\n\nOutput: %1\nSize: %2 MB")
+                        .arg(output_path)
+                        .arg(out_size / (1024.0 * 1024.0), 0, 'f', 2));
+                } else {
+                    progress_bar->setValue(100);
+                    log_text->append("TQ1_0 conversion failed");
+                    QMessageBox::critical(this, "Error", "Quantization failed - could not convert to TQ1_0 format");
+                }
             }
+            
+            quantize_button->setEnabled(true);
+            return;
         }
         
+        // Multiple models: use custom pipeline
+        log_text->append("Starting custom quantization pipeline...");
+        
         worker = new QuantizeWorker;
-        worker->input_models = unique_models;
+        worker->input_models = all_models;
         worker->output_path = output_path;
         worker->dataset_path = dataset_path_edit->text();
         worker->keep_layers_regex = keep_layers_edit->text();

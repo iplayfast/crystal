@@ -6,6 +6,7 @@
 
 #include <cstring>
 #include <iostream>
+#include <sstream>
 
 namespace crystal {
 
@@ -54,16 +55,57 @@ ModelTensors read_model(const std::filesystem::path& gguf_path) {
 
     std::cerr << "GGUF version: " << gguf_get_version(gguf_ctx) << "\n";
 
-    // Read string metadata
+    // Read ALL metadata, preserving types
     const int64_t n_meta = gguf_get_n_kv(gguf_ctx);
     for (int64_t i = 0; i < n_meta; ++i) {
-        if (gguf_get_kv_type(gguf_ctx, i) == GGUF_TYPE_STRING) {
-            const char* key = gguf_get_key(gguf_ctx, i);
-            const char* value = gguf_get_val_str(gguf_ctx, i);
-            if (key && value) {
-                result.metadata[key] = value;
+        const char* key = gguf_get_key(gguf_ctx, i);
+        if (!key) continue;
+        
+        enum gguf_type type = gguf_get_kv_type(gguf_ctx, i);
+        
+        std::ostringstream value_ss;
+        switch (type) {
+            case GGUF_TYPE_STRING: {
+                const char* v = gguf_get_val_str(gguf_ctx, i);
+                if (v) value_ss << v;
+                break;
             }
+            case GGUF_TYPE_UINT32: {
+                uint32_t v = gguf_get_val_u32(gguf_ctx, i);
+                value_ss << v;
+                break;
+            }
+            case GGUF_TYPE_INT32: {
+                int32_t v = gguf_get_val_i32(gguf_ctx, i);
+                value_ss << v;
+                break;
+            }
+            case GGUF_TYPE_FLOAT32: {
+                float v = gguf_get_val_f32(gguf_ctx, i);
+                value_ss << v;
+                break;
+            }
+            case GGUF_TYPE_INT64: {
+                int64_t v = gguf_get_val_i64(gguf_ctx, i);
+                value_ss << v;
+                break;
+            }
+            case GGUF_TYPE_UINT64: {
+                uint64_t v = gguf_get_val_u64(gguf_ctx, i);
+                value_ss << v;
+                break;
+            }
+            case GGUF_TYPE_BOOL: {
+                bool v = gguf_get_val_bool(gguf_ctx, i);
+                value_ss << (v ? "true" : "false");
+                break;
+            }
+            default:
+                continue;
         }
+        
+        result.metadata[key] = value_ss.str();
+        result.metadata_types[key] = static_cast<uint32_t>(type);
     }
 
     // Iterate tensors using ggml context (has proper data and dimensions)

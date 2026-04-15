@@ -93,9 +93,34 @@ llama.cpp linked via FetchContent (tag b8784). API note: uses `llama_memory_clea
 
 ## Known Issues
 
-- Progress bar in quantize GUI stays at 30% during importance computation (no incremental callback)
+- ~~Progress bar in quantize GUI stays at 30% during importance computation~~ - Fixed with signal connection
+- ~~Custom ternary format loses vocabulary~~ - Solved by using llama.cpp TQ1_0
 - CI matrix needs exclude rules for invalid OS/compiler combos (e.g., g++ on Windows)
 - HugeInt is a stub — not usable for real big-integer math
+
+---
+
+## 2025-04-15: TQ1_0 Integration
+
+**Breakthrough:** CLI now delegates to llama.cpp's `llama-quantize` for TQ1_0 (1-bit ternary) conversion, preserving vocabulary and producing output compatible with Bonsai demo.
+
+**Workflow:**
+1. Input GGUF → llama-quantize --allow-requantize → TQ1_0 → Output
+
+**Test Results:**
+- Input: TinyLlama 668MB
+- Output: 297MB (44% compression)
+- Successfully loads and generates text with llama-cli
+
+**CLI Usage:**
+```bash
+./build/debug/apps/crystal_quantize/crystal-quantize output.gguf x input.gguf --no-calibrate
+```
+
+**Alternative (direct):**
+```bash
+llama-quantize input.gguf output.gguf TQ1_0
+```
 
 ---
 

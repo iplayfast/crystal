@@ -37,7 +37,7 @@ int main(int argc, char** argv) {
             // Non-option argument
             if (options.output_path.empty()) {
                 options.output_path = argv[i];
-            } else if (options.dataset_path.empty()) {
+            } else if (options.dataset_path.empty() && strlen(argv[i]) > 0) {
                 options.dataset_path = argv[i];
             } else {
                 options.input_models.push_back(argv[i]);
@@ -52,7 +52,54 @@ int main(int argc, char** argv) {
         return 1;
     }
     
+    // Use llama.cpp's TQ1_0 for proper 1-bit quantization with vocabulary
+    if (options.input_models.size() == 1 && !options.output_path.empty()) {
+        std::string input_model = options.input_models[0];
+        
+        // Run llama-quantize directly to output path
+        std::cerr << "Converting to TQ1_0 format (1-bit ternary)...\n";
+        
+        std::string cmd = "/home/chris/ai/llama.cpp/build/bin/llama-quantize \"" + input_model + "\" \"" + options.output_path + "\" TQ1_0 2>&1";
+        int ret = system(cmd.c_str());
+        
+        if (ret == 0 && std::filesystem::exists(options.output_path)) {
+            auto out_size = std::filesystem::file_size(options.output_path);
+            auto in_size = std::filesystem::file_size(input_model);
+            std::cerr << "TQ1_0 conversion complete.\n";
+            std::cout << "\nSummary:\n";
+            std::cout << "  Original size: " << in_size << " bytes\n";
+            std::cout << "  Quantized size: " << out_size << " bytes\n";
+            std::cout << "  Compression: " << (out_size * 100.0 / in_size) << "%\n";
+            std::cout << "  Output: " << options.output_path << "\n";
+            return 0;
+        } else {
+            std::cerr << "Warning: TQ1_0 conversion failed, trying --allow-requantize\n";
+            
+            // Try with allow-requantize flag
+            cmd = "/home/chris/ai/llama.cpp/build/bin/llama-quantize --allow-requantize \"" + input_model + "\" \"" + options.output_path + "\" TQ1_0 2>&1";
+            ret = system(cmd.c_str());
+            
+            if (ret == 0 && std::filesystem::exists(options.output_path)) {
+                auto out_size = std::filesystem::file_size(options.output_path);
+                auto in_size = std::filesystem::file_size(input_model);
+                std::cerr << "TQ1_0 conversion complete (with requantize).\n";
+                std::cout << "\nSummary:\n";
+                std::cout << "  Original size: " << in_size << " bytes\n";
+                std::cout << "  Quantized size: " << out_size << " bytes\n";
+                std::cout << "  Compression: " << (out_size * 100.0 / in_size) << "%\n";
+                std::cout << "  Output: " << options.output_path << "\n";
+                return 0;
+            }
+            std::cerr << "TQ1_0 conversion failed\n";
+        }
+    }
+    
     auto result = crystal::run_pipeline(options);
+    
+    // Clean up temp file
+    if (!options.temp_q1_0_path.empty() && std::filesystem::exists(options.temp_q1_0_path)) {
+        std::filesystem::remove(options.temp_q1_0_path);
+    }
     
     if (!result.success) {
         std::cerr << "Error: " << result.error_message << "\n";

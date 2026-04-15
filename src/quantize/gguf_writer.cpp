@@ -8,6 +8,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <string>
 #include <unordered_set>
 
 namespace crystal {
@@ -24,15 +25,55 @@ bool write_quantized_gguf(
         return false;
     }
 
-    // Copy original metadata
+    // Copy original metadata with correct types
     for (const auto& [key, value] : model.metadata) {
-        gguf_set_val_str(gguf_ctx, key.c_str(), value.c_str());
+        auto it = model.metadata_types.find(key);
+        uint32_t type = it != model.metadata_types.end() ? it->second : GGUF_TYPE_STRING;
+        
+        switch (type) {
+            case GGUF_TYPE_STRING:
+                gguf_set_val_str(gguf_ctx, key.c_str(), value.c_str());
+                break;
+            case GGUF_TYPE_UINT32: {
+                uint32_t v = static_cast<uint32_t>(std::stoul(value));
+                gguf_set_val_u32(gguf_ctx, key.c_str(), v);
+                break;
+            }
+            case GGUF_TYPE_INT32: {
+                int32_t v = static_cast<int32_t>(std::stol(value));
+                gguf_set_val_i32(gguf_ctx, key.c_str(), v);
+                break;
+            }
+            case GGUF_TYPE_UINT64: {
+                uint64_t v = static_cast<uint64_t>(std::stoull(value));
+                gguf_set_val_u64(gguf_ctx, key.c_str(), v);
+                break;
+            }
+            case GGUF_TYPE_INT64: {
+                int64_t v = std::stoll(value);
+                gguf_set_val_i64(gguf_ctx, key.c_str(), v);
+                break;
+            }
+            case GGUF_TYPE_FLOAT32: {
+                float v = std::stof(value);
+                gguf_set_val_f32(gguf_ctx, key.c_str(), v);
+                break;
+            }
+            case GGUF_TYPE_BOOL: {
+                bool v = (value == "true");
+                gguf_set_val_bool(gguf_ctx, key.c_str(), v);
+                break;
+            }
+            default:
+                gguf_set_val_str(gguf_ctx, key.c_str(), value.c_str());
+                break;
+        }
     }
 
     // Add crystal-specific metadata
     gguf_set_val_str(gguf_ctx, "general.name", "crystal-quantized-ternary");
     gguf_set_val_str(gguf_ctx, "crystal.quantization_method", "absmean_b158");
-    gguf_set_val_i32(gguf_ctx, "general.file_type", 34);
+    gguf_set_val_u32(gguf_ctx, "general.file_type", 34);
 
     // Allocate ggml context for tensor descriptors
     // We need enough space for tensor metadata (not data)

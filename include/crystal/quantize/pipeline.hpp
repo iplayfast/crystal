@@ -17,6 +17,8 @@ struct PipelineOptions {
     std::string keep_layers_regex = "embed|output";
     bool no_calibrate = false;
     bool verbose = false;
+    bool use_q1_0_format = false;
+    std::string temp_q1_0_path;
 };
 
 struct PipelineResult {
