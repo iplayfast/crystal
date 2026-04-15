@@ -212,9 +212,19 @@ ImportanceMatrix compute_importance(
 
 ImportanceMatrix compute_importance_from_weights(const ModelTensors& model) {
     ImportanceMatrix result;
-
+    std::cerr << "WEIGHT_IMPORTANCE: Starting for " << model.tensors.size() << " tensors\n";
+    
+    size_t tensor_count = 0;
+    size_t element_count = 0;
     for (const auto& tensor : model.tensors) {
-        if (tensor.data.empty()) continue;
+        tensor_count++;
+        if (tensor.data.empty()) {
+            std::cerr << "WEIGHT_IMPORTANCE: tensor " << tensor_count << " SKIP (empty)\n";
+            continue;
+        }
+        
+        element_count += tensor.data.size();
+        std::cerr << "WEIGHT_IMPORTANCE: tensor " << tensor_count << " name=" << tensor.name << " elements=" << tensor.data.size() << "\n";
 
         std::vector<float> importance(tensor.data.size());
 
@@ -223,15 +233,19 @@ ImportanceMatrix compute_importance_from_weights(const ModelTensors& model) {
         for (float w : tensor.data) {
             max_abs = std::max(max_abs, std::abs(w));
         }
+        std::cerr << "WEIGHT_IMPORTANCE: tensor " << tensor_count << " max_abs=" << max_abs << "\n";
 
         if (max_abs > 0.0f) {
             for (size_t i = 0; i < tensor.data.size(); ++i) {
                 importance[i] = std::abs(tensor.data[i]) / max_abs;
             }
         }
-
+        
         result.tensor_importance[tensor.name] = std::move(importance);
+        std::cerr << "WEIGHT_IMPORTANCE: tensor " << tensor_count << " DONE\n";
     }
+    
+    std::cerr << "WEIGHT_IMPORTANCE: Finished - " << tensor_count << " tensors, " << element_count << " total elements\n";
 
     return result;
 }

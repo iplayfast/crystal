@@ -145,6 +145,66 @@ FuzzySet<T> FuzzySet<T>::from_json(const nlohmann::json& j) {
     return fs;
 }
 
+template <FloatingPoint T>
+void FuzzySet<T>::optimize(T tolerance) {
+    if (points_.size() < 3) return;
+    std::vector<point_type> optimized;
+    optimized.push_back(points_.front());
+    for (size_t i = 1; i + 1 < points_.size(); ++i) {
+        auto& prev = optimized.back();
+        auto& curr = points_[i];
+        auto& next = points_[i + 1];
+        // Check if curr lies on the line from prev to next
+        T range = next.x - prev.x;
+        if (range == T{0}) continue;
+        T t = (curr.x - prev.x) / range;
+        T expected = prev.membership + t * (next.membership - prev.membership);
+        if (std::abs(curr.membership - expected) > tolerance) {
+            optimized.push_back(curr);
+        }
+    }
+    optimized.push_back(points_.back());
+    points_ = std::move(optimized);
+}
+
+template <FloatingPoint T>
+void FuzzySet<T>::increase_samples(int factor) {
+    if (points_.size() < 2 || factor < 2) return;
+    std::vector<point_type> expanded;
+    expanded.reserve((points_.size() - 1) * factor + 1);
+    for (size_t i = 0; i + 1 < points_.size(); ++i) {
+        expanded.push_back(points_[i]);
+        for (int j = 1; j < factor; ++j) {
+            T t = static_cast<T>(j) / static_cast<T>(factor);
+            T x = points_[i].x + t * (points_[i + 1].x - points_[i].x);
+            T m = points_[i].membership + t * (points_[i + 1].membership - points_[i].membership);
+            expanded.push_back({x, m});
+        }
+    }
+    expanded.push_back(points_.back());
+    points_ = std::move(expanded);
+}
+
+template <FloatingPoint T>
+T FuzzySet<T>::equality(const FuzzySet& other, int samples) const {
+    if (points_.empty() && other.points_.empty()) return T{1};
+    if (points_.empty() || other.points_.empty()) return T{0};
+
+    T x_min = std::min(points_.front().x, other.points_.front().x);
+    T x_max = std::max(points_.back().x, other.points_.back().x);
+    if (x_max == x_min) {
+        return T{1} - std::abs(evaluate(x_min) - other.evaluate(x_min));
+    }
+
+    T sum_diff = T{0};
+    for (int i = 0; i <= samples; ++i) {
+        T x = x_min + (x_max - x_min) * static_cast<T>(i) / static_cast<T>(samples);
+        sum_diff += std::abs(evaluate(x) - other.evaluate(x));
+    }
+    T avg_diff = sum_diff / static_cast<T>(samples + 1);
+    return T{1} - avg_diff;
+}
+
 // Explicit instantiations
 template class FuzzySet<float>;
 template class FuzzySet<double>;

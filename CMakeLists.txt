@@ -68,8 +68,10 @@ else()
     add_subdirectory(apps/crystal_quantize)
 endif()
 
-# GUI App
+# GUI Apps
 add_subdirectory(apps/crystal_quantize_gui)
+add_subdirectory(apps/fuzzy_builder)
+add_subdirectory(apps/class_builder)
 
 # Install (skip for now - llama.cpp dependency isn't exportable)
 # include(GNUInstallDirs)

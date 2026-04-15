@@ -72,6 +72,19 @@ public:
     /// Access points
     [[nodiscard]] const std::vector<point_type>& points() const { return points_; }
 
+    /// Indexed point access
+    [[nodiscard]] T x_at(size_t i) const { return points_.at(i).x; }
+    [[nodiscard]] T membership_at(size_t i) const { return points_.at(i).membership; }
+
+    /// Remove collinear redundant points within tolerance
+    void optimize(T tolerance = T{0.01});
+
+    /// Add midpoint interpolated samples between existing points
+    void increase_samples(int factor = 2);
+
+    /// Similarity metric in [0,1] — 1 means identical
+    [[nodiscard]] T equality(const FuzzySet& other, int samples = 100) const;
+
     /// JSON serialization
     [[nodiscard]] nlohmann::json to_json() const;
     static FuzzySet from_json(const nlohmann::json& j);

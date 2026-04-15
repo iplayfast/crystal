@@ -19,8 +19,13 @@
 #include <QComboBox>
 #include <QDir>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QInputDialog>
 #include <iostream>
 #include <sstream>
+#include <QFile>
 
 struct OllamaModel {
     QString name;
@@ -85,6 +90,10 @@ public:
             populateOllamaCombo();
         });
 
+        auto* ollama_add_button = new QPushButton("Add to Ensemble");
+        ollama_layout->addWidget(ollama_add_button);
+        connect(ollama_add_button, &QPushButton::clicked, this, &CrystalQuantizeGui::addInputModel);
+
         connect(ollama_combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, &CrystalQuantizeGui::onOllamaModelSelected);
 
@@ -109,9 +118,20 @@ public:
             }
         });
 
-        add_model_button = new QPushButton("Add Another Model (for ensemble)");
+        add_model_button = new QPushButton("Add Custom GGUF to Ensemble");
         input_layout->addWidget(add_model_button);
-        connect(add_model_button, &QPushButton::clicked, this, &CrystalQuantizeGui::addInputModel);
+        connect(add_model_button, &QPushButton::clicked, this, [this]() {
+            QString file = QFileDialog::getOpenFileName(this, "Select Custom GGUF Model",
+                QString(), "GGUF Files (*.gguf);;All Files (*)");
+            if (!file.isEmpty()) {
+                if (additional_models.contains(file)) {
+                    QMessageBox::information(this, "Duplicate", "This file is already in the ensemble");
+                    return;
+                }
+                additional_models.append(file);
+                log_text->append("Added custom file: " + file);
+            }
+        });
 
         main_layout->addWidget(input_group);
 
@@ -209,37 +229,46 @@ private:
     void discoverOllamaModels() {
         ollama_models.clear();
         
-        QString ollama_base = QDir::homePath() + "/.ollama/models/blobs";
-        QDir dir(ollama_base);
+        QString home = QDir::homePath();
+        QStringList bases = {home + "/.ollama/models", home + "/.ollama", "/usr/share/ollama/.ollama/models"};
         
-        if (!dir.exists()) {
-            return;
+        QMap<QString, qint64> allBlobs;
+        QMap<QString, QString> blobToBase;
+        QMap<QString, QString> blobPrefix;
+        
+        for (const QString& base : bases) {
+            QDir blobsDir(base + "/blobs");
+            if (!blobsDir.exists()) continue;
+            
+            for (const QFileInfo& info : blobsDir.entryInfoList(QDir::Files | QDir::NoDotAndDotDot)) {
+                QString fname = info.fileName();
+                qint64 size = info.size();
+                if (size <= 100 * 1024 * 1024) continue;
+                
+                QString prefix;
+                if (fname.startsWith("sha256:")) {
+                    prefix = "sha256:";
+                } else if (fname.startsWith("sha256-")) {
+                    prefix = "sha256-";
+                } else continue;
+                
+                QString hash = fname.mid(prefix.length());
+                if (!allBlobs.contains(hash)) {
+                    allBlobs[hash] = size;
+                    blobToBase[hash] = base + "/blobs";
+                    blobPrefix[hash] = prefix;
+                }
+            }
         }
         
-        QFileInfoList entries = dir.entryInfoList(QDir::Files | QDir::NoDotAndDotDot);
+        QMap<QString, QString> modelDigestToName;
         
-        for (const QFileInfo& info : entries) {
-            qint64 size = info.size();
-            QString fname = info.fileName();
-            
-            bool is_model_blob = (fname.startsWith("sha256:") || fname.startsWith("sha256-")) && size > 100 * 1024 * 1024;
-            
-            if (is_model_blob) {
-                OllamaModel model;
-                model.path = info.absoluteFilePath();
-                model.bytes = size;
-                
-                if (size >= 1024ULL * 1024 * 1024) {
-                    model.size = QString::number(size / (1024.0 * 1024.0 * 1024.0), 'f', 1) + " GB";
-                } else {
-                    model.size = QString::number(size / (1024.0 * 1024.0), 'f', 0) + " MB";
-                }
-                
-                QString hash = fname;
-                hash.replace("sha256:", "").replace("sha256-", "");
-                model.name = hash.left(12) + "... (" + model.size + ")";
-                
-                ollama_models.append(model);
+        QStringList manifestRoots = {"registry.ollama.ai/library", "hf.co"};
+        for (const QString& base : bases) {
+            for (const QString& root : manifestRoots) {
+                QDir manifestDir(base + "/manifests/" + root);
+                if (!manifestDir.exists()) continue;
+                scanManifestsRecursive(manifestDir, "", modelDigestToName, allBlobs, blobToBase, blobPrefix);
             }
         }
         
@@ -247,6 +276,49 @@ private:
             [](const OllamaModel& a, const OllamaModel& b) {
                 return b.bytes < a.bytes;
             });
+    }
+    
+    void scanManifestsRecursive(const QDir& dir, const QString& prefix, 
+                        QMap<QString, QString>& modelDigestToName,
+                        QMap<QString, qint64>& allBlobs,
+                        const QMap<QString, QString>& blobToBase,
+                        const QMap<QString, QString>& blobPrefix) {
+        for (const QFileInfo& dirInfo : dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+            QString newPrefix = prefix.isEmpty() ? dirInfo.fileName() : prefix + "/" + dirInfo.fileName();
+            QDir subDir(dirInfo.absoluteFilePath());
+            
+            for (const QFileInfo& fileInfo : subDir.entryInfoList(QDir::Files | QDir::NoDotAndDotDot)) {
+                QFile file(fileInfo.absoluteFilePath());
+                if (!file.open(QIODevice::ReadOnly)) continue;
+                QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+                file.close();
+                if (doc.isNull() || !doc.isObject()) continue;
+                
+                for (const QJsonValue& layer : doc.object().value("layers").toArray()) {
+                    if (layer.toObject().value("mediaType").toString() != "application/vnd.ollama.image.model") continue;
+                    QString digest = layer.toObject().value("digest").toString();
+                    if (digest.startsWith("sha256:")) digest = digest.mid(7);
+                    else if (digest.startsWith("sha256-")) digest = digest.mid(6);
+                    
+                    qint64 size = allBlobs.value(digest, 0);
+                    if (size <= 0) continue;
+                    
+                    OllamaModel model;
+                    model.bytes = size;
+                    model.size = size >= 1024ULL * 1024 * 1024 
+                        ? QString::number(size / (1024.0 * 1024.0 * 1024.0), 'f', 1) + " GB"
+                        : QString::number(size / (1024.0 * 1024.0), 'f', 0) + " MB";
+                    model.name = newPrefix + ":" + fileInfo.fileName() + " (" + model.size + ")";
+                    model.path = blobToBase.value(digest) + "/" + blobPrefix.value(digest) + digest;
+                    modelDigestToName[digest] = model.name;
+                    ollama_models.append(model);
+                    allBlobs.remove(digest);
+                    break;
+                }
+            }
+            
+            scanManifestsRecursive(subDir, newPrefix, modelDigestToName, allBlobs, blobToBase, blobPrefix);
+        }
     }
 
     void populateOllamaCombo() {
@@ -266,31 +338,49 @@ private:
 
 private slots:
     void onOllamaModelSelected(int index) {
-        if (index > 0) {
-            QString path = ollama_combo->currentData().toString();
-            if (!path.isEmpty()) {
-                input_model_edit->setText(path);
-            }
-        }
+        // Just preview - don't auto-fill
     }
 
     void addInputModel() {
-        QString file = QFileDialog::getOpenFileName(this, "Select Additional GGUF Model",
-            QString(), "GGUF Files (*.gguf);;All Files (*)");
-        if (!file.isEmpty()) {
-            input_model_edit->setText(file);
-            additional_models.append(file);
-            log_text->append("Added model for ensemble: " + file);
+        int idx = ollama_combo->currentIndex();
+        if (idx <= 0) {
+            QMessageBox::information(this, "No Model", "Please select an Ollama model first");
+            return;
         }
+        
+        QString path = ollama_combo->currentData().toString();
+        if (path.isEmpty()) {
+            QMessageBox::information(this, "No Model", "Please select an Ollama model first");
+            return;
+        }
+        
+        if (additional_models.contains(path)) {
+            QMessageBox::information(this, "Duplicate", "This model is already in the ensemble");
+            return;
+        }
+        
+        if (additional_models.size() >= 2) {
+            QMessageBox::information(this, "Limit Reached", "Maximum 2 additional models recommended (3 total) due to memory");
+            return;
+        }
+        
+        QString name = ollama_combo->currentText();
+        additional_models.append(path);
+        log_text->append("Added to ensemble: " + name);
     }
 
     void startQuantize() {
         QString input_path = input_model_edit->text();
         QString output_path = output_path_edit->text();
         
-        if (input_path.isEmpty()) {
-            QMessageBox::warning(this, "Error", "Please select an input GGUF model");
+        if (input_path.isEmpty() && additional_models.isEmpty()) {
+            QMessageBox::warning(this, "Error", "Please add at least one model to ensemble");
             return;
+        }
+        
+        // If input_path is set but not in additional_models, add it
+        if (!input_path.isEmpty() && !additional_models.contains(input_path)) {
+            additional_models.prepend(input_path);
         }
         
         if (output_path.isEmpty()) {
@@ -303,8 +393,16 @@ private slots:
         log_text->clear();
         log_text->append("Starting quantization...");
         
+        // Only pass unique models - filter duplicates
+        QStringList unique_models;
+        for (const QString& m : additional_models) {
+            if (!unique_models.contains(m)) {
+                unique_models.append(m);
+            }
+        }
+        
         worker = new QuantizeWorker;
-        worker->input_models = QStringList() << input_path << additional_models;
+        worker->input_models = unique_models;
         worker->output_path = output_path;
         worker->dataset_path = dataset_path_edit->text();
         worker->keep_layers_regex = keep_layers_edit->text();
@@ -317,7 +415,7 @@ private slots:
             log_text->append("Loading model...");
         });
         
-        connect(worker, &QThread::finished, this, &CrystalQuantizeGui::onQuantizeFinished);
+        connect(worker, &QThread::finished, this, &CrystalQuantizeGui::onQuantizeFinished, Qt::QueuedConnection);
         
         worker->start();
     }

@@ -72,15 +72,18 @@ PipelineResult run_pipeline(const PipelineOptions& options) {
 
     // Step 3: Compute importance matrix
     ImportanceMatrix imatrix;
+    std::cerr << "DEBUG: Step 3 - no_calibrate=" << options.no_calibrate << " dataset_path.empty=" << options.dataset_path.empty() << "\n";
     if (!options.no_calibrate && !options.dataset_path.empty()) {
         if (options.verbose) {
             std::cout << "Running calibration...\n";
         }
+        std::cerr << "DEBUG: Calling compute_importance (calibration)\n";
         imatrix = compute_importance(
             options.input_models[0],  // calibrate on first model
             options.dataset_path,
             options.num_chunks,
             options.verbose);
+        std::cerr << "DEBUG: compute_importance returned\n";
     }
 
     // Fall back to weight-magnitude importance if calibration didn't produce per-weight data
@@ -88,13 +91,20 @@ PipelineResult run_pipeline(const PipelineOptions& options) {
         if (options.verbose) {
             std::cout << "Using weight-magnitude importance\n";
         }
+        std::cerr << "DEBUG: Fall back to weight-magnitude importance\n";
+        std::cerr << "DEBUG: model has " << model.tensors.size() << " tensors\n";
+        std::cerr << "DEBUG: Starting compute_importance_from_weights...\n";
         imatrix = compute_importance_from_weights(model);
+        std::cerr << "DEBUG: compute_importance_from_weights returned\n";
+    } else {
+        std::cerr << "DEBUG: Using calibration importance\n";
     }
 
     // Step 4: Quantize
     if (options.verbose) {
         std::cout << "Quantizing model...\n";
     }
+    std::cerr << "DEBUG: Step 4 - Starting quantization\n";
 
     QuantizeOptions qopts;
     qopts.keep_layers_regex = options.keep_layers_regex;
